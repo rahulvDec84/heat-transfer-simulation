@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Heat Transfer – Micro + Macro View</title>
+<title>Heat Transfer – Micro to Macro Visualization</title>
+
 <style>
 body {
   margin: 0;
@@ -29,6 +30,11 @@ canvas {
   background: #000;
   display: block;
 }
+#simContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
 #plotCanvas {
   background: #111;
   border-top: 1px solid #333;
@@ -42,7 +48,7 @@ canvas {
   <div id="controls">
     <h3>Heat Transfer Lab</h3>
 
-    <label>Number of Particles
+    <label>Particles
       <input type="range" id="numParticles" min="100" max="1200" step="100" value="500">
     </label>
 
@@ -58,14 +64,6 @@ canvas {
       <input type="range" id="attraction" min="0" max="0.01" step="0.0005" value="0.003">
     </label>
 
-    <label>Box Width
-      <input type="range" id="boxW" min="400" max="1200" value="900">
-    </label>
-
-    <label>Box Height
-      <input type="range" id="boxH" min="300" max="800" value="500">
-    </label>
-
     <label>Plot Variable
       <select id="plotVar">
         <option value="density">Density</option>
@@ -74,16 +72,29 @@ canvas {
       </select>
     </label>
 
+    <label>Time Averaging
+      <input type="range" id="avgFactor" min="0" max="0.95" step="0.05" value="0.7">
+    </label>
+
+    <label>Box Width
+      <input type="range" id="boxW" min="400" max="1200" value="900">
+    </label>
+
+    <label>Box Height
+      <input type="range" id="boxH" min="300" max="800" value="500">
+    </label>
+
     <p style="font-size:12px;color:#aaa">
       🔵 Cold &nbsp; 🔴 Hot<br>
-      Bottom graph = macroscopic average
+      Bottom: time-averaged macro field
     </p>
   </div>
 
-  <canvas id="canvas"></canvas>
+  <div id="simContainer">
+    <canvas id="canvas"></canvas>
+    <canvas id="plotCanvas" height="240"></canvas>
+  </div>
 </div>
-
-<canvas id="plotCanvas" height="220"></canvas>
 
 <script>
 // =====================
@@ -102,9 +113,10 @@ const ui = {
   TL: document.getElementById("leftTemp"),
   TR: document.getElementById("rightTemp"),
   A: document.getElementById("attraction"),
+  plot: document.getElementById("plotVar"),
+  avg: document.getElementById("avgFactor"),
   W: document.getElementById("boxW"),
-  H: document.getElementById("boxH"),
-  plot: document.getElementById("plotVar")
+  H: document.getElementById("boxH")
 };
 
 // =====================
@@ -117,14 +129,15 @@ const MAX_FORCE = 0.05;
 const BINS = 40;
 
 let particles = [];
+let averagedProfile = Array(BINS).fill(0);
 
 // =====================
 // Helpers
 // =====================
 function randn() {
   let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
+  while (!u) u = Math.random();
+  while (!v) v = Math.random();
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 function tempToSpeed(T) {
@@ -136,20 +149,20 @@ function tempToSpeed(T) {
 // =====================
 function initParticles() {
   particles = [];
+  averagedProfile = Array(BINS).fill(0);
 
   canvas.width = +ui.W.value;
   canvas.height = +ui.H.value;
   plotCanvas.width = canvas.width;
 
-  const avgT = (+ui.TL.value + +ui.TR.value) / 2;
-  const baseSpeed = tempToSpeed(avgT);
+  const base = tempToSpeed((+ui.TL.value + +ui.TR.value) / 2);
 
   for (let i = 0; i < +ui.n.value; i++) {
     particles.push({
       x: Math.random() * canvas.width,
       y: Math.random() * canvas.height,
-      vx: randn() * baseSpeed,
-      vy: randn() * baseSpeed
+      vx: randn() * base,
+      vy: randn() * base
     });
   }
 }
@@ -163,51 +176,36 @@ function updatePhysics() {
   // Attraction
   for (let i = 0; i < particles.length; i++) {
     for (let j = i + 1; j < particles.length; j++) {
-      const a = particles[i];
-      const b = particles[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const d2 = dx * dx + dy * dy;
+      const a = particles[i], b = particles[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d2 = dx*dx + dy*dy;
+      if (d2 === 0 || d2 > CUTOFF*CUTOFF) continue;
 
-      if (d2 === 0 || d2 > CUTOFF * CUTOFF) continue;
-
-      let f = A / d2;
-      f = Math.min(f, MAX_FORCE);
-
-      a.vx += f * dx;
-      a.vy += f * dy;
-      b.vx -= f * dx;
-      b.vy -= f * dy;
+      let f = Math.min(A / d2, MAX_FORCE);
+      a.vx += f * dx; a.vy += f * dy;
+      b.vx -= f * dx; b.vy -= f * dy;
     }
   }
 
   // Collisions
   for (let i = 0; i < particles.length; i++) {
     for (let j = i + 1; j < particles.length; j++) {
-      const a = particles[i];
-      const b = particles[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const dist = Math.hypot(dx, dy);
+      const a = particles[i], b = particles[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0 && d < 2 * RADIUS) {
+        const nx = dx / d, ny = dy / d;
+        const overlap = 2 * RADIUS - d;
+        a.x -= overlap * nx * 0.5;
+        a.y -= overlap * ny * 0.5;
+        b.x += overlap * nx * 0.5;
+        b.y += overlap * ny * 0.5;
 
-      if (dist > 0 && dist < 2 * RADIUS) {
-        const nx = dx / dist;
-        const ny = dy / dist;
-
-        const overlap = 2 * RADIUS - dist;
-        a.x -= 0.5 * overlap * nx;
-        a.y -= 0.5 * overlap * ny;
-        b.x += 0.5 * overlap * nx;
-        b.y += 0.5 * overlap * ny;
-
-        const dvx = b.vx - a.vx;
-        const dvy = b.vy - a.vy;
+        const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
         const vn = dvx * nx + dvy * ny;
         if (vn < 0) {
-          a.vx += vn * nx;
-          a.vy += vn * ny;
-          b.vx -= vn * nx;
-          b.vy -= vn * ny;
+          a.vx += vn * nx; a.vy += vn * ny;
+          b.vx -= vn * nx; b.vy -= vn * ny;
         }
       }
     }
@@ -226,9 +224,7 @@ function updatePhysics() {
       p.vx = -Math.abs(randn()) * tempToSpeed(+ui.TR.value);
       p.x = canvas.width;
     }
-    if (p.y < 0 || p.y > canvas.height) {
-      p.vy *= -1;
-    }
+    if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
   }
 }
 
@@ -237,16 +233,14 @@ function updatePhysics() {
 // =====================
 function drawParticles() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   let vmax = 0;
   for (const p of particles) vmax = Math.max(vmax, Math.hypot(p.vx, p.vy));
 
   for (const p of particles) {
-    const speed = Math.hypot(p.vx, p.vy);
-    const t = Math.min(speed / (vmax + 1e-6), 1);
-    ctx.fillStyle = `hsl(${240 - 240 * t},100%,50%)`;
+    const t = Math.min(Math.hypot(p.vx, p.vy) / (vmax + 1e-6), 1);
+    ctx.fillStyle = `hsl(${240 - 240*t},100%,50%)`;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, RADIUS, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, RADIUS, 0, Math.PI*2);
     ctx.fill();
   }
 }
@@ -258,35 +252,53 @@ function drawPlot() {
   pctx.clearRect(0, 0, plotCanvas.width, plotCanvas.height);
 
   const bins = Array(BINS).fill(0).map(() => ({n:0, v:0, v2:0}));
-
   particles.forEach(p => {
-    const i = Math.min(BINS - 1, Math.floor(p.x / canvas.width * BINS));
+    const i = Math.min(BINS-1, Math.floor(p.x / canvas.width * BINS));
     const s = Math.hypot(p.vx, p.vy);
-    bins[i].n++;
-    bins[i].v += s;
-    bins[i].v2 += s * s;
+    bins[i].n++; bins[i].v += s; bins[i].v2 += s*s;
   });
 
-  const values = bins.map(b => {
+  let inst = bins.map(b => {
     if (ui.plot.value === "density") return b.n;
-    if (ui.plot.value === "speed") return b.n ? b.v / b.n : 0;
-    return b.n ? b.v2 / b.n : 0;
+    if (ui.plot.value === "speed") return b.n ? b.v/b.n : 0;
+    return b.n ? b.v2/b.n : 0;
   });
 
-  const maxV = Math.max(...values, 1e-6);
-  const h = plotCanvas.height;
+  // Time averaging
+  const alpha = +ui.avg.value;
+  averagedProfile = averagedProfile.map((v,i) =>
+    alpha * v + (1-alpha) * inst[i]
+  );
 
+  // Axes
+  const pad = 40;
+  const w = plotCanvas.width, h = plotCanvas.height;
+  pctx.strokeStyle = "#888";
+  pctx.beginPath();
+  pctx.moveTo(pad, 10); pctx.lineTo(pad, h-pad);
+  pctx.lineTo(w-10, h-pad);
+  pctx.stroke();
+
+  const maxV = Math.max(...averagedProfile, 1e-6);
+
+  // Curve
   pctx.strokeStyle = "#00ffcc";
   pctx.beginPath();
-  values.forEach((v, i) => {
-    const x = i / (BINS - 1) * plotCanvas.width;
-    const y = h - (v / maxV) * (h - 20);
-    i === 0 ? pctx.moveTo(x, y) : pctx.lineTo(x, y);
+  averagedProfile.forEach((v,i) => {
+    const x = pad + i/(BINS-1)*(w-pad-10);
+    const y = (h-pad) - (v/maxV)*(h-pad-20);
+    i === 0 ? pctx.moveTo(x,y) : pctx.lineTo(x,y);
   });
   pctx.stroke();
 
+  // Labels
   pctx.fillStyle = "#aaa";
-  pctx.fillText(ui.plot.value.toUpperCase(), 10, 15);
+  pctx.fillText("Distance (Left → Right)", w/2 - 60, h-5);
+  pctx.save();
+  pctx.translate(10, h/2 + 40);
+  pctx.rotate(-Math.PI/2);
+  pctx.fillText(ui.plot.value.toUpperCase(), 0, 0);
+  pctx.restore();
 }
 
 // =====================
@@ -300,7 +312,7 @@ function animate() {
 }
 
 // =====================
-// Live updates
+// Events
 // =====================
 ui.n.oninput = initParticles;
 ui.W.oninput = initParticles;
