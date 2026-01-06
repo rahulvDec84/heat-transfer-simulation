@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Heat Transfer – Micro + Macro View</title>
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #111;
+  color: #eee;
+}
+#top {
+  display: flex;
+}
+#controls {
+  width: 280px;
+  padding: 15px;
+  background: #1b1b1b;
+}
+label {
+  display: block;
+  margin-top: 10px;
+}
+input, select {
+  width: 100%;
+}
+canvas {
+  background: #000;
+  display: block;
+}
+#plotCanvas {
+  background: #111;
+  border-top: 1px solid #333;
+}
+</style>
+</head>
+
+<body>
+
+<div id="top">
+  <div id="controls">
+    <h3>Heat Transfer Lab</h3>
+
+    <label>Number of Particles
+      <input type="range" id="numParticles" min="100" max="1200" step="100" value="500">
+    </label>
+
+    <label>Left Wall Temperature
+      <input type="range" id="leftTemp" min="50" max="800" value="500">
+    </label>
+
+    <label>Right Wall Temperature
+      <input type="range" id="rightTemp" min="50" max="800" value="100">
+    </label>
+
+    <label>Attraction Strength
+      <input type="range" id="attraction" min="0" max="0.01" step="0.0005" value="0.003">
+    </label>
+
+    <label>Box Width
+      <input type="range" id="boxW" min="400" max="1200" value="900">
+    </label>
+
+    <label>Box Height
+      <input type="range" id="boxH" min="300" max="800" value="500">
+    </label>
+
+    <label>Plot Variable
+      <select id="plotVar">
+        <option value="density">Density</option>
+        <option value="temperature">Temperature</option>
+        <option value="speed">Mean Speed</option>
+      </select>
+    </label>
+
+    <p style="font-size:12px;color:#aaa">
+      🔵 Cold &nbsp; 🔴 Hot<br>
+      Bottom graph = macroscopic average
+    </p>
+  </div>
+
+  <canvas id="canvas"></canvas>
+</div>
+
+<canvas id="plotCanvas" height="220"></canvas>
+
+<script>
+// =====================
+// Canvas
+// =====================
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const plotCanvas = document.getElementById("plotCanvas");
+const pctx = plotCanvas.getContext("2d");
+
+// =====================
+// UI
+// =====================
+const ui = {
+  n: document.getElementById("numParticles"),
+  TL: document.getElementById("leftTemp"),
+  TR: document.getElementById("rightTemp"),
+  A: document.getElementById("attraction"),
+  W: document.getElementById("boxW"),
+  H: document.getElementById("boxH"),
+  plot: document.getElementById("plotVar")
+};
+
+// =====================
+// Parameters
+// =====================
+const RADIUS = 3;
+const DT = 1.0;
+const CUTOFF = 40;
+const MAX_FORCE = 0.05;
+const BINS = 40;
+
+let particles = [];
+
+// =====================
+// Helpers
+// =====================
+function randn() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function tempToSpeed(T) {
+  return Math.sqrt(T) * 0.06;
+}
+
+// =====================
+// Initialize
+// =====================
+function initParticles() {
+  particles = [];
+
+  canvas.width = +ui.W.value;
+  canvas.height = +ui.H.value;
+  plotCanvas.width = canvas.width;
+
+  const avgT = (+ui.TL.value + +ui.TR.value) / 2;
+  const baseSpeed = tempToSpeed(avgT);
+
+  for (let i = 0; i < +ui.n.value; i++) {
+    particles.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: randn() * baseSpeed,
+      vy: randn() * baseSpeed
+    });
+  }
+}
+
+// =====================
+// Physics
+// =====================
+function updatePhysics() {
+  const A = +ui.A.value;
+
+  // Attraction
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const a = particles[i];
+      const b = particles[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy;
+
+      if (d2 === 0 || d2 > CUTOFF * CUTOFF) continue;
+
+      let f = A / d2;
+      f = Math.min(f, MAX_FORCE);
+
+      a.vx += f * dx;
+      a.vy += f * dy;
+      b.vx -= f * dx;
+      b.vy -= f * dy;
+    }
+  }
+
+  // Collisions
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const a = particles[i];
+      const b = particles[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 0 && dist < 2 * RADIUS) {
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        const overlap = 2 * RADIUS - dist;
+        a.x -= 0.5 * overlap * nx;
+        a.y -= 0.5 * overlap * ny;
+        b.x += 0.5 * overlap * nx;
+        b.y += 0.5 * overlap * ny;
+
+        const dvx = b.vx - a.vx;
+        const dvy = b.vy - a.vy;
+        const vn = dvx * nx + dvy * ny;
+        if (vn < 0) {
+          a.vx += vn * nx;
+          a.vy += vn * ny;
+          b.vx -= vn * nx;
+          b.vy -= vn * ny;
+        }
+      }
+    }
+  }
+
+  // Move + walls
+  for (const p of particles) {
+    p.x += p.vx * DT;
+    p.y += p.vy * DT;
+
+    if (p.x < 0) {
+      p.vx = Math.abs(randn()) * tempToSpeed(+ui.TL.value);
+      p.x = 0;
+    }
+    if (p.x > canvas.width) {
+      p.vx = -Math.abs(randn()) * tempToSpeed(+ui.TR.value);
+      p.x = canvas.width;
+    }
+    if (p.y < 0 || p.y > canvas.height) {
+      p.vy *= -1;
+    }
+  }
+}
+
+// =====================
+// Draw particles
+// =====================
+function drawParticles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let vmax = 0;
+  for (const p of particles) vmax = Math.max(vmax, Math.hypot(p.vx, p.vy));
+
+  for (const p of particles) {
+    const speed = Math.hypot(p.vx, p.vy);
+    const t = Math.min(speed / (vmax + 1e-6), 1);
+    ctx.fillStyle = `hsl(${240 - 240 * t},100%,50%)`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// =====================
+// Draw macro plot
+// =====================
+function drawPlot() {
+  pctx.clearRect(0, 0, plotCanvas.width, plotCanvas.height);
+
+  const bins = Array(BINS).fill(0).map(() => ({n:0, v:0, v2:0}));
+
+  particles.forEach(p => {
+    const i = Math.min(BINS - 1, Math.floor(p.x / canvas.width * BINS));
+    const s = Math.hypot(p.vx, p.vy);
+    bins[i].n++;
+    bins[i].v += s;
+    bins[i].v2 += s * s;
+  });
+
+  const values = bins.map(b => {
+    if (ui.plot.value === "density") return b.n;
+    if (ui.plot.value === "speed") return b.n ? b.v / b.n : 0;
+    return b.n ? b.v2 / b.n : 0;
+  });
+
+  const maxV = Math.max(...values, 1e-6);
+  const h = plotCanvas.height;
+
+  pctx.strokeStyle = "#00ffcc";
+  pctx.beginPath();
+  values.forEach((v, i) => {
+    const x = i / (BINS - 1) * plotCanvas.width;
+    const y = h - (v / maxV) * (h - 20);
+    i === 0 ? pctx.moveTo(x, y) : pctx.lineTo(x, y);
+  });
+  pctx.stroke();
+
+  pctx.fillStyle = "#aaa";
+  pctx.fillText(ui.plot.value.toUpperCase(), 10, 15);
+}
+
+// =====================
+// Loop
+// =====================
+function animate() {
+  updatePhysics();
+  drawParticles();
+  drawPlot();
+  requestAnimationFrame(animate);
+}
+
+// =====================
+// Live updates
+// =====================
+ui.n.oninput = initParticles;
+ui.W.oninput = initParticles;
+ui.H.oninput = initParticles;
+
+// =====================
+// Start
+// =====================
+initParticles();
+animate();
+</script>
+
+</body>
+</html>
