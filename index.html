@@ -233,16 +233,25 @@ function updatePhysics() {
 // =====================
 function drawParticles() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  let vmax = 0;
-  for (const p of particles) vmax = Math.max(vmax, Math.hypot(p.vx, p.vy));
+const Tmin = +ui.TR.value;
+const Tmax = +ui.TL.value;
 
-  for (const p of particles) {
-    const t = Math.min(Math.hypot(p.vx, p.vy) / (vmax + 1e-6), 1);
-    ctx.fillStyle = `hsl(${240 - 240*t},100%,50%)`;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, RADIUS, 0, Math.PI*2);
-    ctx.fill();
-  }
+const vCold2 = Math.pow(tempToSpeed(Tmin), 2);
+const vHot2  = Math.pow(tempToSpeed(Tmax), 2);
+
+for (const p of particles) {
+  const ke = p.vx*p.vx + p.vy*p.vy;
+
+  let t = (ke - vCold2) / (vHot2 - vCold2);
+  t = Math.max(0, Math.min(1, t));
+
+  ctx.fillStyle = `hsl(${240 - 240*t},100%,50%)`;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+
 }
 
 // =====================
